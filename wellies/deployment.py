@@ -11,15 +11,27 @@ import wellies as wl
 from wellies import LOGGER as logger
 
 
-def _generate_suite(suite, staging_dir, suite_name):
+def _generate_suite(suite, staging_dir, suite_name, extra_files=None):
     """
     Generate a suite in a staging directory.
+
+    ``extra_files`` are copied into the staging directory after the scripts are
+    generated, so they are deployed into ``ECF_FILES`` alongside them and can be
+    referenced from the suite as ``%ECF_FILES%/<name>``. They have to be copied
+    here rather than pre-placed by the caller because this function clears the
+    staging directory first.
     """
     logger.info("Generating suite:")
     logger.info(f"    -> Deploying suite scripts in {staging_dir}")
     if os.path.isdir(staging_dir):
         shutil.rmtree(staging_dir)
     suite.deploy_suite(path=staging_dir)
+    for source in extra_files or []:
+        if not os.path.isfile(source):
+            raise FileNotFoundError(f"extra_files entry not found: {source}")
+        name = os.path.basename(source)
+        shutil.copy2(source, os.path.join(staging_dir, name))
+        logger.info(f"    -> Extra file staged: {name}")
     suite_def = suite.ecflow_definition()
     suite_def.check()
     def_file = os.path.join(staging_dir, f"{suite_name}.def")
@@ -102,7 +114,10 @@ def git_commit_message(message_args):
     if message_args is None:
         message = default_message
     else:
-        message = default_message + "\n\n" + {message}
+        # `{message}` here was a set literal over an unbound local, so passing
+        # -m/--message raised UnboundLocalError instead of appending the message
+        # the docstring promises. The parameter is `message_args`.
+        message = default_message + "\n\n" + message_args
 
     return message
 
@@ -119,6 +134,7 @@ def deploy_suite(
     no_deploy: bool = False,
     message: str = None,
     files: list = None,
+    extra_files: list = None,
 ):
     """
     Deploy a suite to a remote repository.
@@ -149,6 +165,11 @@ def deploy_suite(
     files : list, optional
         The files to deploy. If None, everything is deployed.
         Defaults to None.
+    extra_files : list, optional
+        Paths to additional files to stage alongside the generated scripts, so
+        they are deployed into ``ECF_FILES`` and can be referenced from the suite
+        as ``%ECF_FILES%/<name>``. Unlike ``files``, which selects from what was
+        generated, these are added to it. Defaults to None.
     """
     if build_dir is None:
         build_dir = tempfile.mkdtemp(prefix=f"build_{name}_")
@@ -161,7 +182,7 @@ def deploy_suite(
     local_repo = os.path.join(build_dir, "local")
     target_repo = deploy_dir
 
-    _generate_suite(suite, staging_dir, name)
+    _generate_suite(suite, staging_dir, name, extra_files=extra_files)
 
     try:
         deployer = ts.GitDeployment(
